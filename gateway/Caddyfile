@@ -66,6 +66,17 @@
 		reverse_proxy {$STDB_UPSTREAM:http://spacetimedb.railway.internal:3000}
 	}
 
+	# Read-only name resolution. Every SDK — and the CLI's own `subscribe` —
+	# turns a database name into its identity here before opening the WebSocket,
+	# so blocking it makes the client transport above unusable. GET only.
+	@db_lookup {
+		method GET
+		path_regexp ^/v1/database/[^/]+/(identity|names)$
+	}
+	handle @db_lookup {
+		reverse_proxy {$STDB_UPSTREAM:http://spacetimedb.railway.internal:3000}
+	}
+
 	# Optional extra public routes, composed by entrypoint.sh from
 	# STDB_PUBLIC_HTTP_CALL / STDB_PUBLIC_HTTP_SQL. The default value `^$` can
 	# never match, because every request path starts with a slash.
