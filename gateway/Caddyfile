@@ -9,6 +9,7 @@
 #   public, anonymous   /v1/ping, /v1/health, /v1/identity*,
 #                       /v1/database/<db>/subscribe   (the client WebSocket)
 #                       /v1/database/<db>/route/*     (module HTTP handlers)
+#                       GET /v1/database/<db>/{identity,names,schema}
 #   admin only          everything else, reachable under the secret path prefix
 #                       in STDB_ADMIN_PATH
 {
@@ -66,12 +67,13 @@
 		reverse_proxy {$STDB_UPSTREAM:http://spacetimedb.railway.internal:3000}
 	}
 
-	# Read-only name resolution. Every SDK — and the CLI's own `subscribe` —
-	# turns a database name into its identity here before opening the WebSocket,
-	# so blocking it makes the client transport above unusable. GET only.
+	# Read-only lookups a client performs before it can talk to a database: name
+	# resolution, and the schema it decodes rows against. Blocking either makes
+	# the client transport above unusable, and neither reveals more than
+	# subscribing to a public table already does. GET only.
 	@db_lookup {
 		method GET
-		path_regexp ^/v1/database/[^/]+/(identity|names)$
+		path_regexp ^/v1/database/[^/]+/(identity|names|schema)$
 	}
 	handle @db_lookup {
 		reverse_proxy {$STDB_UPSTREAM:http://spacetimedb.railway.internal:3000}

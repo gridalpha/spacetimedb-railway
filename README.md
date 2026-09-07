@@ -29,7 +29,7 @@ routes and blocks everything else. `gateway/Caddyfile` is the same policy:
 - `POST /v1/identity`, `GET /v1/identity/public-key`, and the rest of `/v1/identity/*`
 - `GET /v1/database/<db>/subscribe` — the WebSocket every SDK connects on
 - `/v1/database/<db>/route/*` — HTTP handlers a module defines, so it can receive webhooks
-- `GET /v1/database/<db>/identity` and `/names` — name resolution every SDK performs before opening the WebSocket
+- `GET /v1/database/<db>/identity`, `/names` and `/schema` — the read-only lookups every SDK performs before it can decode rows
 
 Optionally, with `STDB_PUBLIC_HTTP_CALL=true` / `STDB_PUBLIC_HTTP_SQL=true`:
 
