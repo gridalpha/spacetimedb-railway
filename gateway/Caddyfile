@@ -1,0 +1,89 @@
+# Public gateway for a self-hosted SpacetimeDB instance.
+#
+# A bare SpacetimeDB standalone node is completely open: anyone who can reach it
+# may create a database and run their own WASM/JS module on it. Upstream's own
+# self-hosting guide answers this with an nginx config that publishes only the
+# client-facing routes and blocks the rest; this is the same policy, expressed in
+# Caddy and sized for Railway's edge.
+#
+#   public, anonymous   /v1/ping, /v1/health, /v1/identity*,
+#                       /v1/database/<db>/subscribe   (the client WebSocket)
+#                       /v1/database/<db>/route/*     (module HTTP handlers)
+#   admin only          everything else, reachable under the secret path prefix
+#                       in STDB_ADMIN_PATH
+{
+	admin off
+	auto_https off
+	servers {
+		# Railway's edge reaches containers from CGNAT space; the third range is
+		# the edge's own public range, which {client_ip} needs because Caddy
+		# walks X-Forwarded-For right to left.
+		trusted_proxies static 100.64.0.0/10 fd00::/8 152.233.0.0/17
+	}
+}
+
+:{$PORT:8080} {
+	log {
+		output stdout
+		format console
+	}
+
+	# The gateway's own liveness route. It deliberately does not touch the
+	# upstream: a proxy that health-checks what it proxies fails its own first
+	# deployment, because a Railway private hostname does not resolve until that
+	# service has a healthy deployment of its own.
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	# --- administrative tunnel ------------------------------------------------
+	# The SpacetimeDB CLI builds every request URL by plain string concatenation
+	# and owns the Authorization header itself (it sends its own bearer token),
+	# so a secret path prefix is the one credential it can carry unmodified:
+	#
+	#   spacetime server add --url https://<domain>/<STDB_ADMIN_PATH> railway
+	#   spacetime publish --server railway my-database
+	#
+	# Everything the server exposes is reachable through here, including
+	# publish, delete, sql, logs, metrics and the /internal routes.
+	handle_path /{$STDB_ADMIN_PATH:admin}/* {
+		reverse_proxy {$STDB_UPSTREAM:http://spacetimedb.railway.internal:3000}
+	}
+
+	# --- public client surface ------------------------------------------------
+	# The WebSocket every SDK connects on. This is the transport clients use to
+	# create identities, subscribe to tables and call reducers, all of which the
+	# module's own row-level security and `ctx.sender` checks govern.
+	@client_ws path_regexp ^/v1/database/[^/]+/subscribe$
+	handle @client_ws {
+		reverse_proxy {$STDB_UPSTREAM:http://spacetimedb.railway.internal:3000}
+	}
+
+	# Module-defined HTTP handlers. Upstream leaves these unauthenticated on
+	# purpose so a module can receive third-party webhooks.
+	@module_http path_regexp ^/v1/database/[^/]+/route(/.*)?$
+	handle @module_http {
+		reverse_proxy {$STDB_UPSTREAM:http://spacetimedb.railway.internal:3000}
+	}
+
+	# Optional extra public routes, composed by entrypoint.sh from
+	# STDB_PUBLIC_HTTP_CALL / STDB_PUBLIC_HTTP_SQL. The default value `^$` can
+	# never match, because every request path starts with a slash.
+	@extra_public path_regexp {$STDB_PUBLIC_ROUTES:^$}
+	handle @extra_public {
+		reverse_proxy {$STDB_UPSTREAM:http://spacetimedb.railway.internal:3000}
+	}
+
+	# Identity issuance and the server's public key. The TypeScript SDK requires
+	# these; the Rust and C# SDKs use them opportunistically.
+	@meta path /v1/ping /v1/health /v1/identity /v1/identity/*
+	handle @meta {
+		reverse_proxy {$STDB_UPSTREAM:http://spacetimedb.railway.internal:3000}
+	}
+
+	# Everything else — publish, delete, sql, call, logs, metrics, /internal.
+	handle {
+		header Content-Type application/json
+		respond `{"error":"forbidden","detail":"This SpacetimeDB instance publishes only its client API. Administrative routes are served under the operator's private admin path."}` 403
+	}
+}
